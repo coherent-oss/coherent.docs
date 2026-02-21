@@ -1,136 +1,76 @@
 import contextlib
+import importlib.resources
 import os
 import pathlib
 import subprocess
 import sys
-import urllib.request
 
 import pip_run.deps
 import pip_run.launch
-from coherent.build import bootstrap
-
-DOC_DEPS = [
-    'sphinx >= 3.5',
-    'jaraco.packaging >= 9.3',
-    'rst.linker >= 1.9',
-    'furo',
-    'sphinx-lint',
-]
-
-CONF_PY_URL = (
-    'https://raw.githubusercontent.com/jaraco/skeleton/refs/heads/main/docs/conf.py'
-)
-
-
-def load_conf_py():
-    return urllib.request.urlopen(CONF_PY_URL).read().decode('utf-8')
-
-
-def get_package_name():
-    """
-    Discover the package name from the VCS remote origin or the directory name.
-
-    >>> get_package_name()
-    'coherent.docs'
-    """
-    try:
-        origin = subprocess.check_output(
-            ['git', 'remote', 'get-url', 'origin'],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        name = origin.rpartition('/')[2].removesuffix('.git')
-        if name:
-            return name
-    except Exception:
-        pass
-    return pathlib.Path('.').absolute().name
+from coherent.build import bootstrap, discovery
 
 
 def find_modules(package_name: str, root: pathlib.Path = pathlib.Path()) -> list[str]:
     """
-    Find all public modules (no underscore-prefixed components) in the package.
-
-    Handles both flat layout (root has ``__init__.py``) and traditional layout
-    (package in a subdirectory).
+    Find all public modules in the package using the essential layout.
 
     >>> find_modules('nopackage', pathlib.Path('/nonexistent'))
     ['nopackage']
     """
-    if (root / '__init__.py').exists():
-        # Flat layout: the repo root IS the package
-        pkg_dir = root
+    if not (root / '__init__.py').exists():
+        return [package_name]
 
-        def to_module(parts):
-            if not parts:
-                return package_name
-            return f'{package_name}.{".".join(parts)}'
-
-    else:
-        # Traditional layout: package lives in a subdirectory
-        top = package_name.replace('-', '_').split('.')[0]
-        pkg_dir = root / top
-        if not pkg_dir.exists():
-            return [package_name]
-
-        def to_module(parts):
-            if not parts:
-                return top
-            return f'{top}.{".".join(parts)}'
-
-    modules = []
-    for path in sorted(pkg_dir.rglob('*.py')):
-        rel = path.relative_to(pkg_dir)
-        parts = rel.with_suffix('').parts
+    def to_module(path):
+        parts = path.relative_to(root).with_suffix('').parts
         if parts[-1] == '__init__':
             parts = parts[:-1]
-        if any(p.startswith('_') for p in parts):
-            continue
-        modules.append(to_module(parts))
+        return '.'.join((package_name,) + parts) if parts else package_name
 
-    # Root module first, then alphabetical
-    modules.sort(key=lambda m: (m.count('.'), m))
-    return modules
+    def is_public(path):
+        parts = path.relative_to(root).with_suffix('').parts
+        if parts[-1] == '__init__':
+            parts = parts[:-1]
+        return not any(p.startswith('_') for p in parts)
+
+    return sorted(
+        set(map(to_module, filter(is_public, root.rglob('*.py')))),
+        key=lambda m: (m.count('.'), m),
+    )
+
+
+def make_modules_rst(modules: list[str]) -> str:
+    """
+    Generate the automodule directives for each public module.
+    """
+
+    def module_section(mod, is_first):
+        if is_first:
+            header = ''
+        else:
+            label = mod.split('.')[-1].replace('_', ' ').title()
+            header = f'\n{label}\n' + '-' * len(label) + '\n'
+        return (
+            header
+            + f'\n.. automodule:: {mod}\n'
+            + '   :members:\n'
+            + '   :undoc-members:\n'
+            + '   :show-inheritance:\n'
+        )
+
+    return ''.join(module_section(m, i == 0) for i, m in enumerate(modules))
 
 
 def make_index_rst(package_name: str, modules: list[str]) -> str:
     """
-    Generate ``index.rst`` content from the skeleton boilerplate plus
+    Generate ``index.rst`` content from the template plus
     ``automodule`` directives for each public module.
     """
-    entries = []
-    for mod in modules:
-        if mod != modules[0]:
-            label = mod.split('.')[-1].replace('_', ' ').title()
-            entries.append(f'\n{label}\n{"-" * len(label)}\n')
-        entries.append(
-            f'\n.. automodule:: {mod}\n'
-            f'   :members:\n'
-            f'   :undoc-members:\n'
-            f'   :show-inheritance:\n'
-        )
-    body = ''.join(entries)
-    return (
-        'Welcome to |project| documentation!\n'
-        '===================================\n'
-        '\n'
-        '.. sidebar-links::\n'
-        '   :home:\n'
-        '   :pypi:\n'
-        '\n'
-        '.. toctree::\n'
-        '   :maxdepth: 1\n'
-        '\n'
-        '   history\n'
-        f'{body}\n'
-        '\n'
-        'Indices and tables\n'
-        '==================\n'
-        '\n'
-        '* :ref:`genindex`\n'
-        '* :ref:`modindex`\n'
-        '* :ref:`search`\n'
+    template = (
+        importlib.resources.files(__package__)
+        .joinpath('index.tmpl.rst')
+        .read_text('utf-8')
     )
+    return template.format(modules=make_modules_rst(modules))
 
 
 def build_env(target, *, orig=os.environ):
@@ -149,6 +89,14 @@ def build_env(target, *, orig=os.environ):
         PYTHONSAFEPATH='1',
     )
     return {**orig, **overlay}
+
+
+def load_conf_py():
+    return (
+        importlib.resources.files(__package__)
+        .joinpath('conf.py')
+        .read_text('utf-8')
+    )
 
 
 @contextlib.contextmanager
@@ -176,13 +124,13 @@ def project_on_path():
     Install the target project plus doc build dependencies in an ephemeral
     environment and yield the installation home path.
     """
-    deps = pip_run.deps.load('--editable', '.', *DOC_DEPS)
+    deps = pip_run.deps.load('--editable', '.[doc]')
     with bootstrap.write_pyproject(), deps as home:
         yield home
 
 
 def run():
-    package_name = get_package_name()
+    package_name = discovery.best_name()
     with project_on_path() as home:
         with configure_docs(package_name):
             cmd = [
@@ -196,3 +144,4 @@ def run():
                 *sys.argv[1:],
             ]
             raise SystemExit(subprocess.call(cmd, env=build_env(home)))
+
