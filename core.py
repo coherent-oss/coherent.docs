@@ -2,6 +2,7 @@ import contextlib
 import importlib.resources
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -9,16 +10,22 @@ import pip_run.deps
 import pip_run.launch
 from coherent.build import bootstrap, discovery
 
+AUTOMODULE_TMPL = """\
+
+.. automodule:: {mod}
+   :members:
+   :undoc-members:
+   :show-inheritance:
+"""
+
 
 def find_modules(package_name: str, root: pathlib.Path = pathlib.Path()) -> list[str]:
     """
     Find all public modules in the package using the essential layout.
 
-    >>> find_modules('nopackage', pathlib.Path('/nonexistent'))
-    ['nopackage']
+    >>> find_modules('my.pkg', pathlib.Path('/nonexistent'))
+    []
     """
-    if not (root / '__init__.py').exists():
-        return [package_name]
 
     def to_module(path):
         parts = path.relative_to(root).with_suffix('').parts
@@ -26,14 +33,11 @@ def find_modules(package_name: str, root: pathlib.Path = pathlib.Path()) -> list
             parts = parts[:-1]
         return '.'.join((package_name,) + parts) if parts else package_name
 
-    def is_public(path):
-        parts = path.relative_to(root).with_suffix('').parts
-        if parts[-1] == '__init__':
-            parts = parts[:-1]
-        return not any(p.startswith('_') for p in parts)
-
     return sorted(
-        set(map(to_module, filter(is_public, root.rglob('*.py')))),
+        filter(
+            lambda m: not re.search(r'\._', m),
+            map(to_module, root.rglob('*.py')),
+        ),
         key=lambda m: (m.count('.'), m),
     )
 
@@ -42,22 +46,7 @@ def make_modules_rst(modules: list[str]) -> str:
     """
     Generate the automodule directives for each public module.
     """
-
-    def module_section(mod, is_first):
-        if is_first:
-            header = ''
-        else:
-            label = mod.split('.')[-1].replace('_', ' ').title()
-            header = f'\n{label}\n' + '-' * len(label) + '\n'
-        return (
-            header
-            + f'\n.. automodule:: {mod}\n'
-            + '   :members:\n'
-            + '   :undoc-members:\n'
-            + '   :show-inheritance:\n'
-        )
-
-    return ''.join(module_section(m, i == 0) for i, m in enumerate(modules))
+    return ''.join(AUTOMODULE_TMPL.format(mod=m) for m in modules)
 
 
 def make_index_rst(package_name: str, modules: list[str]) -> str:
@@ -78,6 +67,7 @@ def build_env(target, *, orig=os.environ):
     Build the environment for invoking sphinx, inserting the installed
     packages path onto PYTHONPATH.
 
+    # TODO: consolidate with coherent.test and other similar helpers.
     >>> env = build_env('foo', orig=dict(PYTHONPATH='bar'))
     >>> env['PYTHONPATH'].replace(os.pathsep, ':')
     'foo:bar'
@@ -144,4 +134,5 @@ def run():
                 *sys.argv[1:],
             ]
             raise SystemExit(subprocess.call(cmd, env=build_env(home)))
+
 
