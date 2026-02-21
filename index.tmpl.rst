@@ -4,11 +4,11 @@ Welcome to |project| documentation!
 .. sidebar-links::
    :home:
    :pypi:
+   :releases:
 
 .. toctree::
    :maxdepth: 1
 
-   history
 {modules}
 
 Indices and tables
