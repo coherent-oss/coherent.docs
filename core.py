@@ -55,7 +55,8 @@ def make_index_rst(package_name: str, modules: list[str]) -> str:
     ``automodule`` directives for each public module.
     """
     template = (
-        importlib.resources.files(__package__)
+        importlib.resources
+        .files(__package__)
         .joinpath('index.tmpl.rst')
         .read_text('utf-8')
     )
@@ -82,11 +83,7 @@ def build_env(target, *, orig=os.environ):
 
 
 def load_conf_py():
-    return (
-        importlib.resources.files(__package__)
-        .joinpath('conf.py')
-        .read_text('utf-8')
-    )
+    return importlib.resources.files(__package__).joinpath('conf.py').read_text('utf-8')
 
 
 @contextlib.contextmanager
@@ -134,5 +131,3 @@ def run():
                 *sys.argv[1:],
             ]
             raise SystemExit(subprocess.call(cmd, env=build_env(home)))
-
-
