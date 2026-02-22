@@ -127,7 +127,6 @@ def run():
                 '-b',
                 'html',
                 'docs',
-                'build/docs',
-                *sys.argv[1:],
+                'build/html',
             ]
             raise SystemExit(subprocess.call(cmd, env=build_env(home)))
