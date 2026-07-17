@@ -5,6 +5,8 @@ Tool for orchestrating documentation builds using Sphinx.
 'coherent.docs'
 """
 
+__license__ = 'Apache-2.0'
+
 __requires__ = [
     'coherent.build',
     'pip-run',
